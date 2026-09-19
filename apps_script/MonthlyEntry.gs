@@ -74,7 +74,12 @@ var MAP = [
   {stage:'B46', sheet:'Comp & Benefits', kind:'fixed', row:13, col:3},  // Tuition YTD
   {stage:'B47', sheet:'Comp & Benefits', kind:'fixed', row:14, col:3},  // Stakeholder YTD
   {stage:'B48', sheet:'Comp & Benefits', kind:'fixed', row:20, col:3},  // Sue 403b YTD
-  {stage:'B49', sheet:'Comp & Benefits', kind:'fixed', row:26, col:3}   // 529 YTD
+  {stage:'B49', sheet:'Comp & Benefits', kind:'fixed', row:26, col:3},  // 529 YTD
+
+  // (6) Spending Guardrail -- discretionary actuals, months are columns
+  {stage:'B52', sheet:'Spending Guardrail', kind:'monthCol', row:22},   // Matt actual
+  {stage:'B53', sheet:'Spending Guardrail', kind:'monthCol', row:25},   // Sue actual
+  {stage:'B54', sheet:'Spending Guardrail', kind:'monthCol', row:28}    // Household actual
 ];
 
 function onOpen() {
@@ -156,7 +161,9 @@ var FORM_MAP = [
   ['Amazon → Other/gifts', 'B37'],
   ['Matt gross earnings YTD', 'B41'], ['Matt 401k YTD', 'B42'], ['Matt 401k match YTD', 'B43'],
   ['FSA Dep Care YTD', 'B44'], ['FSA Health Care YTD', 'B45'], ['Tuition reimbursement YTD', 'B46'],
-  ['Stakeholder earnings YTD', 'B47'], ['Sue 403b YTD', 'B48'], ['529 contributions YTD', 'B49']
+  ['Stakeholder earnings YTD', 'B47'], ['Sue 403b YTD', 'B48'], ['529 contributions YTD', 'B49'],
+  ['Matt discretionary spent', 'B52'], ['Sue discretionary spent', 'B53'],
+  ['Household discretionary spent', 'B54']
 ];
 
 function createMonthlyForm() {
@@ -188,6 +195,9 @@ function createMonthlyForm() {
   ['Matt gross earnings YTD','Matt 401k YTD','Matt 401k match YTD','FSA Dep Care YTD',
    'FSA Health Care YTD','Tuition reimbursement YTD','Stakeholder earnings YTD',
    'Sue 403b YTD','529 contributions YTD'].forEach(addNum_(form));
+
+  form.addSectionHeaderItem().setTitle('Discretionary spent this month');
+  ['Matt discretionary spent','Sue discretionary spent','Household discretionary spent'].forEach(addNum_(form));
 
   // Install a submit trigger that funnels answers into the Monthly Entry tab.
   ScriptApp.newTrigger('onMonthlyFormSubmit').forForm(form).onFormSubmit().create();
