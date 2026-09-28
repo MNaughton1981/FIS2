@@ -370,56 +370,115 @@ function buildBalances_(ss, year) {
 
 function buildDashboard_(ss, year) {
   const sh = sheetReset_(ss, "FIRE Dashboard");
-  sh.setColumnWidth(1, 300); sh.setColumnWidth(2, 160);
-  sh.getRange("A1").setValue("🔥 FIRE Dashboard (" + year + ")").setFontSize(16).setFontWeight("bold");
-  sh.getRange("A2").setValue("All figures pull live from the Income Statement & Balances tabs.")
-    .setFontStyle("italic").setFontColor("#666666");
+  sh.setColumnWidth(1, 330); sh.setColumnWidth(2, 150); sh.setColumnWidth(3, 400);
+  const ORANGE = "#FCE5CD", YELLOW = COLORS.input;
 
-  const kv = (row, label, formula, fmt, note) => {
-    sh.getRange(row,1).setValue(label).setFontWeight("bold");
-    const c = sh.getRange(row,2).setFormula(formula);
+  sh.getRange("A1").setValue("🔥 FIRE Dashboard").setFontSize(16).setFontWeight("bold");
+  sh.getRange("A2").setValue("Educational planning tool, not investment advice. ORANGE = assumptions you set • YELLOW = balances/contributions you update over time. FI math uses a REAL (inflation-adjusted) return.")
+    .setFontStyle("italic").setFontColor("#666666").setWrap(true);
+
+  let r = 4;
+  const R = {};
+  const section = (t) => {
+    sh.getRange(r,1,1,3).setBackground(COLORS.header);
+    sh.getRange(r,1).setValue(t).setFontWeight("bold").setFontColor("#ffffff");
+    r++;
+  };
+  const input = (label, val, fmt, bg, note) => {
+    sh.getRange(r,1).setValue(label);
+    const c = sh.getRange(r,2).setValue(val).setBackground(bg || YELLOW);
     if (fmt) c.setNumberFormat(fmt);
-    if (note) sh.getRange(row,3).setValue(note).setFontStyle("italic").setFontColor("#888888");
+    if (note) sh.getRange(r,3).setValue(note).setFontStyle("italic").setFontColor("#888888");
+    return r++;
+  };
+  const calc = (label, formula, fmt, note, bold) => {
+    const a = sh.getRange(r,1).setValue(label); if (bold) a.setFontWeight("bold");
+    const c = sh.getRange(r,2).setFormula(formula); if (fmt) c.setNumberFormat(fmt); if (bold) c.setFontWeight("bold");
+    if (note) sh.getRange(r,3).setValue(note).setFontStyle("italic").setFontColor("#888888");
+    return r++;
   };
 
-  // Assumptions (editable inputs)
-  sh.getRange("A4").setValue("ASSUMPTIONS").setFontWeight("bold").setBackground(COLORS.section);
-  sh.getRange("B4").setBackground(COLORS.section);
-  sh.getRange("A5").setValue("Safe withdrawal rate (SWR)");
-  sh.getRange("B5").setValue(0.04).setNumberFormat("0.0%").setBackground(COLORS.input);
-  sh.getRange("A6").setValue("Current age");
-  sh.getRange("B6").setValue(35).setBackground(COLORS.input);
-  sh.getRange("A7").setValue("Target FIRE age");
-  sh.getRange("B7").setValue(55).setBackground(COLORS.input);
-  sh.getRange("A8").setValue("Expected real return (for Coast FIRE)");
-  sh.getRange("B8").setValue(0.05).setNumberFormat("0.0%").setBackground(COLORS.input);
+  // ① ASSUMPTIONS
+  section("① HOUSEHOLD ASSUMPTIONS");
+  R.age1  = input("Your current age", 40, null, ORANGE);
+  R.age2  = input("Partner current age (optional)", 40, null, ORANGE);
+  R.year  = input("Current calendar year", year, null, ORANGE);
+  R.spend = input("Target annual retirement spend ($)", 80000, "$#,##0", ORANGE, "tip: your Income Statement's annualized expenses are a good starting point");
+  R.swr   = input("Safe withdrawal rate (SWR)", 0.04, "0.0%", ORANGE);
+  R.nom   = input("Nominal expected return", 0.07, "0.0%", ORANGE);
+  R.infl  = input("Assumed inflation", 0.03, "0.0%", ORANGE);
+  R.real  = calc("Real return (auto)", `=(1+B${R.nom})/(1+B${R.infl})-1`, "0.0%", "Fisher: (1+nominal)/(1+inflation)−1");
+  r++;
 
-  // Spending & savings
-  sh.getRange("A10").setValue("SPENDING & SAVINGS").setFontWeight("bold").setBackground(COLORS.section);
-  sh.getRange("B10").setBackground(COLORS.section);
-  kv(11, "Expenses YTD", "=Total_Expenses_YTD", "$#,##0");
-  kv(12, "Avg monthly expenses", '=IFERROR(AVERAGEIF(Total_Expenses_Row,">0"),0)', "$#,##0", "months with data only");
-  kv(13, "Estimated annual expenses", "=B12*12", "$#,##0", "avg monthly × 12");
-  kv(14, "Savings rate (YTD)", "=IFERROR(Net_CashFlow_YTD/Total_Income_YTD,0)", "0.0%", "net cash flow ÷ income");
+  // ② CURRENT INVESTED ASSETS
+  section("② CURRENT INVESTED ASSETS");
+  const a1 = input("401k / 403b — you", 0, "$#,##0");
+  input("401k / 403b — partner", 0, "$#,##0");
+  input("IRAs (Roth + traditional)", 0, "$#,##0");
+  input("HSA (invested portion)", 0, "$#,##0");
+  input("Taxable brokerage", 0, "$#,##0");
+  const a6 = input("Cash earmarked for FI", 0, "$#,##0");
+  R.totInv = calc("TOTAL INVESTED", `=SUM(B${a1}:B${a6})`, "$#,##0", null, true);
+  input("(memo) 529 / education — excluded from FI", 0, "$#,##0", null, "not counted toward FI");
+  r++;
 
-  // FIRE metrics
-  sh.getRange("A16").setValue("FIRE PROGRESS").setFontWeight("bold").setBackground(COLORS.section);
-  sh.getRange("B16").setBackground(COLORS.section);
-  kv(17, "Current net worth", "=NetWorth_Current", "$#,##0");
-  kv(18, "FIRE number", "=IFERROR(B13/B5,0)", "$#,##0", "annual spend ÷ SWR (the 25× rule at 4%)");
-  kv(19, "Progress to FI", "=IFERROR(B17/B18,0)", "0.0%");
-  kv(20, "Remaining to FI", "=MAX(B18-B17,0)", "$#,##0");
-  kv(21, "Safe annual withdrawal now", "=B17*B5", "$#,##0", "what your current NW would throw off");
-  kv(22, "Coast FIRE number (today)", "=IFERROR(B18/((1+B8)^(B7-B6)),0)", "$#,##0",
-     "NW that, untouched, grows to your FIRE # by target age");
-  kv(23, "Coast FIRE reached?", '=IF(B17>=B22,"YES ✔","not yet")', null);
+  // ③ ANNUAL CONTRIBUTIONS
+  section("③ ANNUAL CONTRIBUTIONS");
+  const c1 = input("401k / 403b (employee)", 0, "$#,##0");
+  input("Employer match", 0, "$#,##0");
+  input("Partner retirement", 0, "$#,##0");
+  input("HSA", 0, "$#,##0");
+  input("IRAs (both)", 0, "$#,##0");
+  const c6 = input("Taxable brokerage", 0, "$#,##0");
+  R.totContrib = calc("TOTAL ANNUAL INVESTED", `=SUM(B${c1}:B${c6})`, "$#,##0", null, true);
+  r++;
 
-  // Progress bar (visual)
-  sh.getRange("A25").setValue("Progress to FI");
-  sh.getRange("B25").setFormula('=SPARKLINE(MIN(B19,1),{"charttype","bar";"max",1;"color1","#2E7D32"})');
+  // ④ SAVINGS RATE
+  section("④ SAVINGS RATE");
+  R.gross = input("Gross household income ($)", 0, "$#,##0", ORANGE);
+  R.savrate = calc("Savings rate", `=IFERROR(B${R.totContrib}/B${R.gross},0)`, "0.0%", "annual invested ÷ gross income");
+  r++;
 
-  sh.getRange("A27").setValue("Tip: keep Balances updated monthly — the dashboard reads the latest filled month.")
-    .setFontStyle("italic").setFontColor("#888888");
+  // ⑤ FI NUMBER
+  section("⑤ FI NUMBER (with & without an income floor)");
+  R.grossFI = calc("Gross FI number (spend ÷ SWR)", `=IFERROR(B${R.spend}/B${R.swr},0)`, "$#,##0", "the 25× rule at 4%", true);
+  R.pension = input("Pension (annual, if any)", 0, "$#,##0", ORANGE);
+  R.ss      = input("Social Security household (annual, est)", 0, "$#,##0", ORANGE);
+  R.floor   = calc("Income floor (pension + SS)", `=B${R.pension}+B${R.ss}`, "$#,##0");
+  R.floorCap= calc("Income floor — capitalized value", `=IFERROR(B${R.floor}/B${R.swr},0)`, "$#,##0", "floor ÷ SWR (portfolio it replaces)");
+  R.netFI   = calc("NET FI number (target once floor starts)", `=IFERROR(MAX(0,(B${R.spend}-B${R.floor})/B${R.swr}),0)`, "$#,##0", "portfolio still needed after the floor", true);
+  r++;
+
+  // ⑥ YEARS TO FI
+  section("⑥ YEARS TO FI (portfolio-only runway)");
+  R.years = calc("Years to reach GROSS FI number", `=IFERROR(NPER(B${R.real},-B${R.totContrib},-B${R.totInv},B${R.grossFI}),"check inputs")`, "0.0", "compounds current assets + contributions at the real return");
+  R.ageFI = calc("Your age at FI", `=IF(ISNUMBER(B${R.years}),B${R.age1}+B${R.years},"—")`, "0.0");
+  R.yearFI= calc("FI calendar year", `=IF(ISNUMBER(B${R.years}),B${R.year}+B${R.years},"—")`, "0");
+  r++;
+
+  // ⑦ PRE-59½ BRIDGE
+  section("⑦ PRE-59½ BRIDGE (early-access runway)");
+  R.earlyAge = input("Planned early-retire age", 55, null, ORANGE);
+  const b1 = input("Roth IRA contributions (accessible)", 0, "$#,##0");
+  input("HSA receipt shoebox (accessible)", 0, "$#,##0");
+  const b3 = input("Taxable brokerage (accessible)", 0, "$#,##0");
+  R.totAccess = calc("Total accessible before 59½", `=SUM(B${b1}:B${b3})`, "$#,##0", null, true);
+  R.yrs59 = calc("Years until 59½", `=59.5-B${R.earlyAge}`, "0.0");
+  R.uncovered = input("Annual spend uncovered in bridge ($)", 0, "$#,##0", ORANGE, "spend not met by other income during the bridge");
+  R.bridgeNeed = calc("Bridge need", `=MAX(0,B${R.yrs59})*B${R.uncovered}`, "$#,##0");
+  R.bridgeGap = calc("Bridge surplus / (gap)", `=B${R.totAccess}-B${R.bridgeNeed}`, "$#,##0", "positive = the bridge is covered", true);
+  r++;
+
+  // Progress
+  section("PROGRESS TO FI");
+  R.progress = calc("Progress to GROSS FI number", `=IFERROR(B${R.totInv}/B${R.grossFI},0)`, "0.0%");
+  sh.getRange(r,1).setValue("Progress bar");
+  sh.getRange(r,2).setFormula(`=SPARKLINE(MIN(MAX(B${R.progress},0),1),{"charttype","bar";"max",1;"color1","#2E7D32"})`);
+  r += 2;
+
+  sh.getRange(r,1).setValue("Notes: NPER assumes level real contributions and a constant real return — a planning estimate, not a guarantee. The income-floor rows let you see how a pension/Social Security shrinks the portfolio you actually need.")
+    .setFontStyle("italic").setFontColor("#888888").setWrap(true);
+
   sh.setFrozenRows(2);
 }
 
