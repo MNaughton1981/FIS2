@@ -69,6 +69,20 @@ const VARIABLE_CATS = [
 // One-time / large items — manual entry
 const ONETIME_LINES = ["One-time / large item 1", "One-time / large item 2"];
 
+// Import sources. Add one line per account/statement, then either re-run
+// "Setup / Rebuild Template" (rebuilds all import tabs) or just duplicate the
+// "Imports" tab, rename it to match, and it works on the next Categorize run.
+// Supported formats (Category is always the last column, auto-filled):
+//   "signed"      A=Date  B=Description  C=Amount(+in/−out)          D=Account            E=Category
+//   "debitcredit" A=Date  B=Description  C=Amount(magnitude)         D=Type(Debit/Credit) E=Category
+//   "card"        A=Date  B=Description  C=Amount(charge +, refund −) D=Account           E=Category
+const IMPORT_TABS = [
+  { name: "Imports", format: "signed" },
+  // Examples — uncomment / edit and re-run Setup to add more sources:
+  // { name: "Imports - Checking", format: "debitcredit" },
+  // { name: "Imports - Card",     format: "card" },
+];
+
 const COLORS = {
   header:  "#1F4E78",
   section: "#D9E1F2",
@@ -686,17 +700,28 @@ function buildUtilityRecon_(ss, year, is) {
 /* ---------------------------- IMPORTS ----------------------------------- */
 
 function buildImports_(ss) {
-  const sh = sheetReset_(ss, "Imports");
-  sh.setColumnWidth(1, 100); sh.setColumnWidth(2, 340); sh.setColumnWidth(3, 110);
-  sh.setColumnWidth(4, 130); sh.setColumnWidth(5, 160);
-  sh.getRange("A1").setValue("Imports — paste raw transactions below (data starts row 5)").setFontSize(13).setFontWeight("bold");
-  sh.getRange("A2").setValue("Sign convention: Amount is POSITIVE for money in, NEGATIVE for money out.")
-    .setFontStyle("italic").setFontColor("#666666");
-  const hdr = ["Date","Description","Amount","Account","Category (auto)"];
-  sh.getRange(4,1,1,5).setValues([hdr]).setFontWeight("bold").setBackground(COLORS.header).setFontColor("#ffffff");
-  sh.getRange(5,1,1000,1).setNumberFormat('m/d/yyyy');
-  sh.getRange(5,3,1000,1).setNumberFormat('$#,##0.00;[Red]($#,##0.00)');
-  sh.setFrozenRows(4);
+  IMPORT_TABS.forEach(cfg => {
+    const sh = sheetReset_(ss, cfg.name);
+    sh.setColumnWidth(1, 100); sh.setColumnWidth(2, 340); sh.setColumnWidth(3, 110);
+    sh.setColumnWidth(4, 150); sh.setColumnWidth(5, 160);
+
+    const isDC = cfg.format === "debitcredit";
+    const isCard = cfg.format === "card";
+    const note = isDC   ? "Amount is a magnitude; the Type column (Debit/Credit) sets the direction."
+               : isCard ? "Card statement: charges are POSITIVE (money out), refunds/credits NEGATIVE."
+               :          "Sign convention: Amount is POSITIVE for money in, NEGATIVE for money out.";
+    const col4 = isDC ? "Type (Debit/Credit)" : "Account";
+
+    sh.getRange("A1").setValue(cfg.name + " — paste raw transactions below (data starts row 5)")
+      .setFontSize(13).setFontWeight("bold");
+    sh.getRange("A2").setValue(note + "   [format: " + cfg.format + "]")
+      .setFontStyle("italic").setFontColor("#666666");
+    sh.getRange(4,1,1,5).setValues([["Date","Description","Amount",col4,"Category (auto)"]])
+      .setFontWeight("bold").setBackground(COLORS.header).setFontColor("#ffffff");
+    sh.getRange(5,1,1000,1).setNumberFormat('m/d/yyyy');
+    sh.getRange(5,3,1000,1).setNumberFormat('$#,##0.00;[Red]($#,##0.00)');
+    sh.setFrozenRows(4);
+  });
 }
 
 /* ----------------------------- RULES ------------------------------------ */
@@ -861,42 +886,15 @@ function categorizeAll() {
   let rules;
   try { rules = loadRules_(); } catch (e) { ui.alert(e.message); return; }
 
-  const imp = ss.getSheetByName("Imports");
-  if (!imp) { ui.alert("Imports tab not found — run Setup first."); return; }
-  const last = imp.getLastRow();
-  if (last < 5) { ui.alert("No transactions found in Imports."); return; }
-
-  const n = last - 4;
-  const data = imp.getRange(5,1,n,4).getValues(); // A:date B:desc C:amount D:account
-  const catCol = [];
-
   const monthlyVar = {}, monthlyInc = {}, monthlyFix = {};
-  const bucket = (obj, m, key, val) => { (obj[m] = obj[m] || {})[key] = (obj[m][key] || 0) + val; };
 
-  data.forEach(row => {
-    const [date, desc, amount] = row;
-    if (!date || desc === "" || amount === "") { catCol.push([""]); return; }
-    const m = getMonthIndex_(date);
-    if (m === null) { catCol.push([""]); return; }
-
-    const res = categorize_(desc, rules);
-    const cat = res.category;
-    const amt = Number(amount);
-
-    if (cat === "__TRANSFER__" || cat === "__MANUAL__") {
-      // ignored — transfers, and manually-entered categories (utilities)
-    } else if (cat.indexOf("__INCOME__:") === 0) {
-      bucket(monthlyInc, m, cat.replace("__INCOME__:", ""), amt);            // inflow positive
-    } else if (cat.indexOf("__FIXED__:") === 0) {
-      bucket(monthlyFix, m, cat.replace("__FIXED__:", ""), Math.abs(amt));   // expense magnitude
-    } else {
-      bucket(monthlyVar, m, cat, -amt);                                      // outflow negative → positive spend
-    }
-    catCol.push([cat]);
+  // Process every configured import tab into the shared monthly buckets.
+  let total = 0, tabsSeen = 0;
+  IMPORT_TABS.forEach(cfg => {
+    const res = processImportTab_(ss, cfg, rules, monthlyVar, monthlyInc, monthlyFix);
+    if (res >= 0) { tabsSeen++; total += res; }
   });
-
-  // Write category column back to Imports (col E)
-  imp.getRange(5,5,n,1).setValues(catCol);
+  if (total === 0) { ui.alert("No transactions found in any import tab (" + IMPORT_TABS.map(c => c.name).join(", ") + ")."); return; }
 
   // Write CC Detail grid
   const cc = ss.getSheetByName("CC Detail");
@@ -923,7 +921,57 @@ function categorizeAll() {
   writeRows(monthlyInc, INCOME_LINES);
   writeRows(monthlyFix, FIXED_LINES);
 
-  ui.alert("Categorize complete — " + n + " rows processed.\n\nVariable spending → CC Detail.\nIncome & fixed → Income Statement.\nUtilities, transfers & manual items were left untouched.");
+  ui.alert("Categorize complete — " + total + " rows across " + tabsSeen + " import tab(s).\n\n" +
+           "Variable → CC Detail. Income & fixed → Income Statement.\nUtilities, transfers & manual items were left untouched.");
+}
+
+// Categorize one import tab into the shared monthly buckets. Returns the row
+// count processed, or -1 if the tab doesn't exist. Category is written to col E.
+// Internal sign convention: positive = money IN, negative = money OUT.
+function processImportTab_(ss, cfg, rules, monthlyVar, monthlyInc, monthlyFix) {
+  const sh = ss.getSheetByName(cfg.name);
+  if (!sh) return -1;
+  const last = sh.getLastRow();
+  if (last < 5) return 0;
+
+  const n = last - 4;
+  const data = sh.getRange(5, 1, n, 4).getValues();   // A=date B=desc C=amount D=account|type
+  const catCol = [];
+  const bucket = (obj, m, key, val) => { (obj[m] = obj[m] || {})[key] = (obj[m][key] || 0) + val; };
+  let count = 0;
+
+  data.forEach(row => {
+    const date = row[0], desc = row[1], c = row[2], d = row[3];
+    if (!date || desc === "" || c === "") { catCol.push([""]); return; }
+    const m = getMonthIndex_(date);
+    if (m === null) { catCol.push([""]); return; }
+
+    // Derive a signed amount (+in / −out) from the tab's format.
+    let amt;
+    if (cfg.format === "debitcredit")      amt = (String(d).toLowerCase() === "credit") ? Number(c) : -Number(c);
+    else if (cfg.format === "card")        amt = -Number(c);   // charges are positive on a card statement = money out
+    else                                    amt = Number(c);    // "signed": already +in/−out
+    if (isNaN(amt)) { catCol.push([""]); return; }
+
+    const res = categorize_(desc, rules);
+    const cat = res.category;
+
+    if (cat === "__TRANSFER__" || cat === "__MANUAL__") {
+      // ignored — transfers, and manually-entered categories (utilities)
+    } else if (cat.indexOf("__INCOME__:") === 0) {
+      bucket(monthlyInc, m, cat.replace("__INCOME__:", ""), amt);            // inflow positive
+    } else if (cat.indexOf("__FIXED__:") === 0) {
+      bucket(monthlyFix, m, cat.replace("__FIXED__:", ""), Math.abs(amt));   // expense magnitude
+    } else {
+      const vc = (VARIABLE_CATS.indexOf(cat) >= 0) ? cat : "Other / misc";   // fold unknown categories
+      bucket(monthlyVar, m, vc, -amt);                                       // outflow negative → positive spend
+    }
+    catCol.push([cat]);
+    count++;
+  });
+
+  sh.getRange(5, 5, n, 1).setValues(catCol);   // write Category column (E)
+  return count;
 }
 
 function generateCharts() {
@@ -993,12 +1041,15 @@ function generateCharts() {
 
 function clearImports() {
   const ui = SpreadsheetApp.getUi();
-  if (ui.alert("Clear Imports", "Wipe all rows in the Imports tab (row 5+)?", ui.ButtonSet.YES_NO) !== ui.Button.YES) return;
+  if (ui.alert("Clear Imports", "Wipe all rows (row 5+) in every import tab: " + IMPORT_TABS.map(c => c.name).join(", ") + "?", ui.ButtonSet.YES_NO) !== ui.Button.YES) return;
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sh = ss.getSheetByName("Imports");
-  const last = sh.getLastRow();
-  if (last >= 5) sh.getRange(5,1,last-4,sh.getLastColumn()).clearContent();
-  ui.alert("Imports cleared.");
+  IMPORT_TABS.forEach(cfg => {
+    const sh = ss.getSheetByName(cfg.name);
+    if (!sh) return;
+    const last = sh.getLastRow();
+    if (last >= 5) sh.getRange(5,1,last-4,sh.getLastColumn()).clearContent();
+  });
+  ui.alert("Import tabs cleared.");
 }
 
 function rollOverYear() {
