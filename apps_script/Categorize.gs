@@ -57,6 +57,58 @@ const FIXED_LABEL = {
   // NOTE: "Electric" intentionally omitted — Eversource is manual (see categorize()).
 };
 
+/* --------------------------- IMPORT SOURCES ---------------------------- *
+ * One line per account/card. To add a card: create a matching "Imports - <X>"
+ * tab (paste the raw CSV; data starts row 5; the LAST column is the auto
+ * "→ Category"), add a line below, and re-run "Categorize & Roll Up".
+ * `format` points at a FORMATS entry that maps the raw CSV columns.
+ * -------------------------------------------------------------------- */
+const IMPORT_TABS = [
+  { name: "Imports - Checking", format: "capone_bank" },
+  { name: "Imports - Savings",  format: "capone_bank" },
+  { name: "Imports - Barclay",  format: "barclay" },
+  // Phasing out Barclay? Add the replacement card here and make the tab:
+  // { name: "Imports - Chase",    format: "chase" },
+  // { name: "Imports - Amex",     format: "amex" },
+  // { name: "Imports - Discover", format: "discover" },
+];
+
+// Column maps are 0-based indices into each pasted row. Everything normalizes to
+// a signed `amount`: +in (money in) / -out (spend). Amount types:
+//   signed      {col}                        raw value already +in / -out
+//   spendPos    {col}                        raw value is +spend (typical card) -> negated
+//   debitcredit {amtCol,typeCol,creditWord}  magnitude + a Debit/Credit column
+//   splitcols   {debitCol,creditCol}         separate Debit & Credit columns
+// VERIFY a new card's column order against its downloaded CSV header and adjust.
+const FORMATS = {
+  // Capital One BANK: A=acct B=desc C=date D=type(Debit/Credit) E=amount
+  capone_bank: { dateCol: 2, descCol: 1, amount: { type: "debitcredit", amtCol: 4, typeCol: 3, creditWord: "credit" } },
+  // Barclaycard: A=date B=desc C=category D=amount (charges already negative)
+  barclay:     { dateCol: 0, descCol: 1, amount: { type: "signed", col: 3 } },
+  // Chase: Trans Date, Post Date, Description, Category, Type, Amount, Memo (Amount: charge -, credit +)
+  chase:       { dateCol: 0, descCol: 2, amount: { type: "signed", col: 5 } },
+  // Amex: Date, Description, Amount (Amount: charge +)
+  amex:        { dateCol: 0, descCol: 1, amount: { type: "spendPos", col: 2 } },
+  // Discover: Trans Date, Post Date, Description, Amount, Category (Amount: charge +)
+  discover:    { dateCol: 0, descCol: 2, amount: { type: "spendPos", col: 3 } },
+  // Citi: Status, Date, Description, Debit, Credit
+  citi:        { dateCol: 1, descCol: 2, amount: { type: "splitcols", debitCol: 3, creditCol: 4 } },
+  // Capital One CREDIT CARD: Trans Date, Posted Date, Card No, Description, Category, Debit, Credit
+  capone_card: { dateCol: 0, descCol: 3, amount: { type: "splitcols", debitCol: 5, creditCol: 6 } },
+};
+
+// Pull {date, desc, amount(+in/-out)} from a raw row using a FORMATS entry.
+function extractRow_(row, fmt) {
+  const A = fmt.amount;
+  let amount;
+  if (A.type === "spendPos")          amount = -Number(row[A.col]);
+  else if (A.type === "debitcredit")  amount = (String(row[A.typeCol]).toLowerCase() === A.creditWord) ? Number(row[A.amtCol]) : -Number(row[A.amtCol]);
+  else if (A.type === "splitcols")    amount = (Number(row[A.creditCol]) || 0) - (Number(row[A.debitCol]) || 0);
+  else                                amount = Number(row[A.col]);   // "signed"
+  if (isNaN(amount)) amount = 0;
+  return { date: row[fmt.dateCol], desc: row[fmt.descCol], amount: amount };
+}
+
 function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu("📊 Family Finances")
@@ -135,9 +187,11 @@ function categorizeAll() {
   const monthlyVar = {}, monthlyInc = {}, monthlyFix = {};
   function bucket(obj, month, key, val) { if (!obj[month]) obj[month] = {}; obj[month][key] = (obj[month][key] || 0) + val; }
 
-  function processBatched(sheetName, kind) {
+  function processBatched(sheetName, format) {
     const sheet = ss.getSheetByName(sheetName);
     if (!sheet) return 0;
+    const fmt = FORMATS[format];
+    if (!fmt) { Logger.log("Unknown format '" + format + "' for " + sheetName); return 0; }
     const last = sheet.getLastRow();
     if (last < 5) return 0;
 
@@ -149,20 +203,11 @@ function categorizeAll() {
     let processedCount = 0;
 
     data.forEach((row) => {
-      let date, desc, amount;
       const blank = () => { categories.push([""]); backgrounds.push(new Array(numCols).fill("#ffffff")); };
 
-      if (kind === "capone") {
-        const [_, d, dt, type, a] = row;   // A=acct B=desc C=date D=type E=amount
-        date = dt; desc = d;
-        if (!date || !desc) { blank(); return; }
-        amount = (String(type).toLowerCase() === "credit") ? Number(a) : -Number(a);
-      } else if (kind === "barclay") {
-        const [dt, d, _cat, a] = row;      // A=date B=desc C=cat D=amount
-        date = dt; desc = d;
-        if (!date || !desc) { blank(); return; }
-        amount = Number(a);
-      }
+      const ex = extractRow_(row, fmt);
+      const date = ex.date, desc = ex.desc, amount = ex.amount;
+      if (!date || !desc) { blank(); return; }
 
       const month = getMonth(date);
       if (month === null) { blank(); return; }
@@ -193,9 +238,7 @@ function categorizeAll() {
     return processedCount;
   }
 
-  const checkingCount = processBatched("Imports - Checking", "capone");
-  const savingsCount  = processBatched("Imports - Savings",  "capone");
-  const barclayCount  = processBatched("Imports - Barclay",  "barclay");
+  const counts = IMPORT_TABS.map(t => ({ name: t.name, n: processBatched(t.name, t.format) }));
 
   // CC Detail grid (variable spending) — rows 5.. in CC_CATS order.
   const ccSheet = ss.getSheetByName("CC Detail");
@@ -212,9 +255,9 @@ function categorizeAll() {
   writeCategoryRows_(is, monthlyInc, INCOME_LABEL);
   writeCategoryRows_(is, monthlyFix, FIXED_LABEL);
 
+  const summary = counts.map(c => "  " + c.name.replace("Imports - ", "") + ": " + c.n + " rows").join("\n");
   ui.alert(
-    "Categorize complete.\n\n" +
-    "Checking: " + checkingCount + " rows\nSavings:  " + savingsCount + " rows\nBarclay:  " + barclayCount + " rows\n\n" +
+    "Categorize complete.\n\n" + summary + "\n\n" +
     "Utilities (Eversource) were left for manual entry. Yellow rows in Imports = uncategorized."
   );
 }
@@ -322,9 +365,9 @@ function generateCharts() {
 
 function clearAllImports() {
   const ui = SpreadsheetApp.getUi();
-  if (ui.alert("Clear All Imports", "This will wipe data in all 3 Imports tabs (rows 5+). Continue?", ui.ButtonSet.YES_NO) !== ui.Button.YES) return;
+  if (ui.alert("Clear All Imports", "This will wipe data in all " + IMPORT_TABS.length + " Imports tabs (rows 5+). Continue?", ui.ButtonSet.YES_NO) !== ui.Button.YES) return;
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  ["Imports - Checking", "Imports - Savings", "Imports - Barclay"].forEach(name => {
+  IMPORT_TABS.map(t => t.name).forEach(name => {
     const sheet = ss.getSheetByName(name);
     if (!sheet) return;
     const last = sheet.getLastRow();
